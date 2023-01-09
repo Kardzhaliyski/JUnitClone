@@ -9,15 +9,12 @@ public class AssertionFailedError extends AssertionError {
         super(formatMessage(expected, actual, message));
     }
 
-    public AssertionFailedError(Object expected, Object actual, String message, Throwable cause) {
-        super(formatMessage(expected, actual, message));
-    }
-
     private static String formatMessage(Object expected, Object actual, String message) {
         return String.format("%s expected: <%s> but was: <%s>",
                 message == null ? "" : message + " ==> ",
                 expected,
                 actual);
+
     }
 
 }

@@ -6,6 +6,7 @@ import junit.Assertions;
 import java.time.Duration;
 import java.util.Random;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import static junit.Assertions.*;
@@ -98,7 +99,8 @@ public class CalculatorTest {
             for (int i = 0; i < 1000000; i++) {
                 String value = "" + i;
                 result = Long.parseLong(value);
-            };
+            }
+            ;
         });
     }
 
@@ -109,7 +111,8 @@ public class CalculatorTest {
             for (int i = 0; i < 1000000; i++) {
                 String value = "" + i;
                 result = Long.parseLong(value);
-            };
+            }
+            ;
             return result;
         });
     }
@@ -136,4 +139,56 @@ public class CalculatorTest {
             return result;
         });
     }
+
+    @Test(timeout = 35)
+    void testFailedAssertTimeoutWithAnnotation() throws Throwable {
+        assertTimeout(Duration.ofMillis(3000), () -> {
+            long result = 0;
+            for (int i = 0; i < 10000000; i++) {
+                String value = "" + i;
+                result = Long.parseLong(value);
+            }
+        });
+    }
+
+    @Test(dependsOnMethods = "testDependencyTwo")
+    void testDependencyThree() {
+        assertTrue(false);
+    }
+
+    @Test(dependsOnMethods = "testDependencyOne")
+    void testDependencyTwo() {
+    }
+
+    @Test(dependsOnMethods = "testDependencyTwo")
+    void testDependencyThreeAgain() {
+    }
+
+    @Test
+    void testDependencyOne() {
+    }
+
+    @Test(dependsOnMethods = "testDependencyThree")
+    void testDependencyFourExpectedToFail() {
+    }
+
+    @Test(expectedException = IllegalStateException.class)
+    void testFailedExpectedExceptionAnnotation() {
+        throw new IllegalArgumentException();
+    }
+
+    void testAssertAll() {
+        assertAll(() -> assertEquals(3,3),
+//                () -> assertEquals(3,4),
+                () -> assertEquals(3,-2));
+    }
+
+    @Test
+    void testAssertAllWithHeading() {
+        assertAll("Some Heading",
+                () -> assertEquals(3,3),
+                () -> assertEquals(3,4),
+                () -> assertEquals(3,-2));
+    }
+
 }

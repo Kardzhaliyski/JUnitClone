@@ -1,6 +1,8 @@
 package junit;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
@@ -231,5 +233,26 @@ public class Assertions {
 
     public static <T> void assertTimeoutPreemptively(Duration timeout, ThrowingSupplier<T> supplier, Supplier<String> message) throws ExecutionException, InterruptedException {
         assertTimeoutPreemptively(timeout, supplier, message != null ? message.get() : null);
+    }
+
+    public static void assertAll(Executable... executables) {
+        assertAll(null, executables);
+    }
+
+    public static void assertAll(String heading, Executable... executables) {
+        List<Throwable> throwableList = new ArrayList<>();
+        for (Executable executable : executables) {
+            try {
+                executable.execute();
+            } catch (Throwable e) {
+                throwableList.add(e);
+            }
+        }
+
+        if(throwableList.size() == 0) {
+            return;
+        }
+
+        throw new MultipleFailuresError(heading, throwableList);
     }
 }

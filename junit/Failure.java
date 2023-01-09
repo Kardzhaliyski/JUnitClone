@@ -5,10 +5,10 @@ import junit.annotations.DisplayName;
 import java.lang.reflect.Method;
 
 public class Failure {
-    public Method method;
+    public TestMethod method;
     public Throwable error;
 
-    public Failure(Method method, Throwable e) {
+    public Failure(TestMethod method, Throwable e) {
         this.method = method;
         this.error = e;
     }

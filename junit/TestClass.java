@@ -5,18 +5,21 @@ import junit.annotations.*;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class TestClass {
     Class<?> clazz;
     Object instance;
-
-    List<Method> beforeAllMethods = new ArrayList<>();
-    List<Method> beforeEachMethods = new ArrayList<>();
-    List<Method> testMethods = new ArrayList<>();
-    List<Method> afterEachMethods = new ArrayList<>();
-    List<Method> afterAllMethods = new ArrayList<>();
+    Map<String, TestMethod> allMethods = new HashMap<>();
+    List<TestMethod> beforeAllMethods = new ArrayList<>();
+    List<TestMethod> beforeEachMethods = new ArrayList<>();
+    List<TestMethod> testMethods = new ArrayList<>();
+    List<TestMethod> afterEachMethods = new ArrayList<>();
+    List<TestMethod> afterAllMethods = new ArrayList<>();
 
     public TestClass(Class<?> clazz) {
         this.clazz = clazz;
@@ -33,61 +36,127 @@ public class TestClass {
         }
     }
 
-    public Result test() throws Exception {
+    public Result test(Result result) throws Exception {
         System.out.printf("'-- %s [OK]%n", clazz.getSimpleName());
-        Result result = new Result();
-        invokeMethods(instance, beforeAllMethods);
-        for (Method method : testMethods) {
-            RepeatedTest rt = method.getAnnotation(RepeatedTest.class);
-            if(rt != null && rt.value() <= 0){
-                String message = String.format("Configuration error: @RepeatedTest on method [%s %s.%s()] must be declared with a positive 'value'.",
-                        method.getReturnType(), clazz.getName(), method.getName());
-                Failure failure = new Failure(method, new IllegalArgumentException(message));
-                printNoRepeatResult(method, failure);
-                result.addFailure(failure);
-                continue;
-            }
 
-            int repeats = rt != null ? rt.value() : 1;
-            testMethod(result, method, repeats);
+        invokeMethods(instance, beforeAllMethods);
+        for (TestMethod method : testMethods) {
+            test(result, method);
         }
 
         invokeMethods(instance, afterAllMethods);
         return result;
     }
 
-    private void testMethod(Result result, Method method, int repeats) throws InvocationTargetException, IllegalAccessException {
-        if(repeats > 1) {
+    private void test(Result result, TestMethod method) throws InvocationTargetException, IllegalAccessException {
+        if (method.invoked) {
+            return;
+        }
+
+        RepeatedTest rt = method.getAnnotation(RepeatedTest.class);
+        if (!validateRepeatAnnotation(result, method, rt)) {
+            return;
+        }
+
+        if (!invokeDependantMethods(result, method)) {
+            return;
+        }
+
+        int repeats = rt != null ? rt.value() : 1;
+        if (repeats > 1) {
             DisplayName ann = method.getAnnotation(DisplayName.class);
             System.out.printf("  +-- %s() [OK]%n", ann != null ? ann.value() : method.getName());
         }
 
         for (int i = 1; i <= repeats; i++) {
             invokeMethods(instance, beforeEachMethods);
-            Failure failure = null;
-            try {
-                method.invoke(instance);
-            } catch (Exception e) {
-                Throwable exception = e.getCause();
-                if (exception instanceof AssertionFailedError ex) {
-                    failure = new Failure(method, ex);
-                } else {
-                    failure = new Failure(method, new Exception(exception.getClass().getName(), exception));
-                }
-            }
-
-            if(repeats == 1) {
+            Failure failure = invokeTestMethod(method);
+            if (repeats == 1) {
                 printNoRepeatResult(method, failure);
             } else {
                 printRepeatResult(failure, repeats, i);
             }
 
-            if(failure != null) {
+            if (failure != null) {
                 result.addFailure(failure);
             }
 
             invokeMethods(instance, afterEachMethods);
         }
+    }
+
+    private Failure invokeTestMethod(TestMethod method) {
+        Failure failure = null;
+        Test testAnn = method.getAnnotation(Test.class);
+        try {
+            if (testAnn.timeout() > 0) {
+                Duration duration = Duration.of(testAnn.timeout(), testAnn.timeoutUnit());
+                Assertions.assertTimeoutPreemptively(duration, () -> method.invoke(instance));
+            } else {
+                method.invoke(instance);
+            }
+        } catch (Throwable e) {
+            Throwable exception = e instanceof InvocationTargetException ? e.getCause() : e;
+            if (exception instanceof AssertionFailedError || exception instanceof MultipleFailuresError) {
+                return failure = new Failure(method, exception);
+            }
+
+            if (testAnn.expectedException() != Test.NULL_ANNOTATION.class) {
+                if(testAnn.expectedException() != exception.getClass()) {
+                    return new Failure(
+                            method,
+                            new AssertionFailedError(testAnn.expectedException(), exception.getClass(), null));
+                }
+
+                return null;
+            }
+
+            return new Failure(
+                    method,
+                    new Exception(exception.getClass().getName(), exception));
+        }
+
+        return null;
+    }
+
+    private boolean invokeDependantMethods(Result result, TestMethod method) throws InvocationTargetException, IllegalAccessException {
+        Test testAnn = method.getAnnotation(Test.class);
+        for (String mName : testAnn.dependsOnMethods()) {
+            TestMethod depMethod = allMethods.get(mName);
+            if (depMethod == null) {
+                Failure failure = new Failure(method, new IllegalArgumentException("No depending method found with name: " + mName));
+                result.addFailure(failure);
+                printNoRepeatResult(method, failure);
+                return false;
+            }
+
+            if (!depMethod.invoked) {
+                test(result, depMethod);
+            }
+
+            if (!depMethod.successful) {
+                Failure failure = new Failure(method, new IllegalStateException("Not successful depending method: " + depMethod.getName()));
+                result.addFailure(failure);
+                printNoRepeatResult(method, failure);
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static boolean validateRepeatAnnotation(Result result, TestMethod method, RepeatedTest rt) {
+        boolean isValid = (rt == null || rt.value() > 0);
+        if (isValid) {
+            return true;
+        }
+
+        String message = String.format("Configuration error: @RepeatedTest on method [%s %s.%s()] must be declared with a positive 'value'.",
+                method.getReturnType(), method.getDeclaringClass().getName(), method.getName());
+        Failure failure = new Failure(method, new IllegalArgumentException(message));
+        printNoRepeatResult(method, failure);
+        result.addFailure(failure);
+        return isValid;
     }
 
     private void printRepeatResult(Failure failure, int max, int count) {
@@ -98,7 +167,7 @@ public class TestClass {
         }
     }
 
-    private static void printNoRepeatResult(Method method, Failure failure) {
+    private static void printNoRepeatResult(TestMethod method, Failure failure) {
         DisplayName ann = method.getAnnotation(DisplayName.class);
         if (failure == null) {
             System.out.printf("  +-- %s() [OK]%n", ann != null ? ann.value() : method.getName());
@@ -107,26 +176,11 @@ public class TestClass {
         }
     }
 
-    private Failure testMethod(Method method) throws InvocationTargetException, IllegalAccessException {
-        invokeMethods(instance, beforeEachMethods);
-        Failure failure = null;
-        try {
-            method.invoke(instance);
-        } catch (Exception e) {
-            Throwable exception = e.getCause();
-            if (exception instanceof AssertionFailedError ex) {
-                failure = new Failure(method, ex);
-            } else {
-                failure = new Failure(method, new Exception(exception.getClass().getName(), exception));
-            }
-        }
-
-        return failure;
-    }
-
     private void extractMethods() {
-        for (Method method : clazz.getDeclaredMethods()) {
-            for (Annotation annotation : method.getDeclaredAnnotations()) {
+        for (Method m : clazz.getDeclaredMethods()) {
+            TestMethod method = new TestMethod(m);
+            allMethods.put(method.getName(), method);
+            for (Annotation annotation : m.getDeclaredAnnotations()) {
                 Class<? extends Annotation> type = annotation.annotationType();
 
                 if (type.equals(BeforeAll.class)) {
@@ -139,18 +193,15 @@ public class TestClass {
                     afterAllMethods.add(method);
                 } else if (type.equals(Test.class)) {
                     testMethods.add(method);
-                } else {
-                    continue;
                 }
-
-                method.setAccessible(true);
             }
         }
     }
 
-    private static void invokeMethods(Object instance, List<Method> beforeAllMethods) throws InvocationTargetException, IllegalAccessException {
-        for (Method method : beforeAllMethods) {
+    private static void invokeMethods(Object instance, List<TestMethod> beforeAllMethods) throws InvocationTargetException, IllegalAccessException {
+        for (TestMethod method : beforeAllMethods) {
             method.invoke(instance);
         }
     }
+
 }
